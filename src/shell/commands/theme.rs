@@ -1,4 +1,6 @@
+// src/shell/commands/theme.rs
 use super::Command;
+use crate::shell::commands::CommandRegistry;
 use crate::shell::prompt::Prompt;
 use std::sync::{Arc, Mutex};
 
@@ -7,20 +9,22 @@ pub struct ThemeCommand {
 }
 
 impl Command for ThemeCommand {
-    fn name(&self) -> &'static str { "theme" }
-    fn description(&self) -> &'static str { "Reloads or manages theme configuration." }
+    fn name(&self) -> &'static str {
+        "theme"
+    }
+    fn about(&self) -> &'static str {
+        "Gestion du thème (reload)."
+    }
+    fn usage(&self) -> &'static str {
+        "theme reload"
+    }
 
-    fn execute(&self, args: &[&str]) {
-        if args.is_empty() {
-            println!("Usage: theme reload");
-            return;
-        }
-
-        if args[0] == "reload" {
-            let mut prompt = self.prompt.lock().unwrap();
-            prompt.reload();
+    fn execute(&self, args: &[&str], _registry: &CommandRegistry) {
+        if args.first().copied() == Some("reload") {
+            let mut p = self.prompt.lock().unwrap();
+            p.reload();
         } else {
-            println!("Unknown argument: {}", args[0]);
+            println!("Usage: theme reload");
         }
     }
 }

@@ -1,8 +1,13 @@
+# PascheK Shell - Theme configuration
+
 [shell]
-color = "BrightCyan"
+color = "BrightGreen"
+
 [path]
-color = "BrightWhite"
+color = "BrightBlue"
+
 [time]
-color = "BrightRed"
-[symbol]
 color = "BrightYellow"
+
+[symbol]
+color = "BrightMagenta"

@@ -1,18 +1,5 @@
-//! Built-in command system for PascheK Shell
-//!
-//! This module provides the infrastructure for registering and executing
-//! built-in shell commands. It includes:
-//!
-//! - A trait-based command system for consistent command interfaces
-//! - A central registry for managing available commands
-//! - Built-in commands for core shell functionality
-//!
-//! Available commands:
-//! - [`cd`]: Change current directory
-//! - [`clear`]: Clear terminal screen
-//! - [`hello`]: Display greeting message
-//! - [`help`]: Show available commands
-//! - [`theme`]: Customize prompt appearance
+// src/shell/commands/mod.rs
+use std::collections::HashMap;
 
 pub mod cd;
 pub mod clear;
@@ -20,129 +7,153 @@ pub mod hello;
 pub mod help;
 pub mod theme;
 
-/// Trait defining the interface for all shell commands
-///
-/// This trait ensures all commands provide:
-/// - A static name for command invocation
-/// - A description for help text
-/// - An execution method that handles the command's logic
-///
-/// # Implementation Guidelines
-/// - `name`: Should be lowercase, no spaces
-/// - `description`: Should be a brief, single-line explanation
-/// - `execute`: Should handle all command-specific logic and output
-///
-/// # Examples
-/// ```no_run
-/// struct MyCommand;
-/// impl Command for MyCommand {
-///     fn name(&self) -> &'static str { "mycommand" }
-///     fn description(&self) -> &'static str { "Does something useful" }
-///     fn execute(&self, args: &[&str]) {
-///         println!("Executed with args: {:?}", args);
-///     }
-/// }
-/// ```
-pub trait Command {
-    /// Returns the command's name used for invocation
+/// Contrat minimal d’une commande interne.
+pub trait Command: Send + Sync {
+    /// Nom canonique (clé d’invocation), ex: "help".
     fn name(&self) -> &'static str;
-    /// Returns a brief description of the command's purpose
-    fn description(&self) -> &'static str;
-    /// Executes the command with the given arguments
-    fn execute(&self, args: &[&str]);
+
+    /// Brève description (pour liste/overview).
+    fn about(&self) -> &'static str;
+
+    /// Syntaxe d’utilisation (ex: "help [command]").
+    fn usage(&self) -> &'static str {
+        self.name()
+    }
+
+    /// Alias éventuels (ex: ["h"] pour help).
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Point d’entrée : exécute la commande.
+    /// `registry` est passé pour les commandes qui veulent introspecter (ex: help).
+    fn execute(&self, args: &[&str], registry: &CommandRegistry);
 }
 
-use std::{collections::HashMap, sync::{Arc, Mutex}};
-use crate::shell::prompt::Prompt;
-
-use self::{
-    cd::CdCommand, clear::ClearCommand, hello::HelloCommand, help::HelpCommand, theme::ThemeCommand,
-};
-
-/// Central registry for managing and executing built-in shell commands
-///
-/// The CommandRegistry maintains a collection of commands that implement the
-/// [`Command`] trait, allowing for:
-/// - Dynamic registration of new commands
-/// - Command lookup by name
-/// - Unified execution interface
-///
-/// Commands are stored as trait objects (`Box<dyn Command>`) to allow for
-/// runtime polymorphism and extensibility.
+/// Registre central des commandes internes.
 pub struct CommandRegistry {
-    /// Map of command names to their implementations
+    /// commandes par nom canonique
     commands: HashMap<String, Box<dyn Command>>,
+    /// alias -> nom canonique
+    alias_map: HashMap<String, String>,
 }
 
 impl CommandRegistry {
-    /// Creates a new registry initialized with basic commands
-    /// 
-    /// # Returns
-    /// A new CommandRegistry with core commands registered:
-    /// - cd (change directory)
-    /// - clear (clear screen)
-    /// - hello (greeting)
-    /// - help (command list)
-    #[allow(dead_code)]  // Used as alternative constructor
+    /// Construit le registre de base (sans dépendances particulières).
     pub fn new() -> Self {
         let mut registry = Self {
             commands: HashMap::new(),
+            alias_map: HashMap::new(),
         };
-        // Register core commands
-        registry.register(CdCommand);
-        registry.register(ClearCommand);
-        registry.register(HelloCommand);
-        registry.register(HelpCommand);
+
+        // Enregistre ici toutes les commandes "simples"
+        registry.register(hello::HelloCommand);
+        registry.register(clear::ClearCommand);
+        registry.register(cd::CdCommand);
+        // `help` utilise le registry en lecture, mais on lui passe `&registry` à l'exécution
+        registry.register(help::HelpCommand);
+        // `theme` nécessitera l’accès au Prompt => voir new_with_prompt dans ton code si besoin
+
         registry
     }
 
-    /// Registers a new command in the registry
-    ///
-    /// # Arguments
-    /// * `cmd` - Any type that implements the Command trait
-    ///
-    /// # Type Parameters
-    /// * `C` - The command type, must implement Command and have static lifetime
-    pub fn register<C: Command + 'static>(&mut self, cmd: C) {
-        self.commands.insert(cmd.name().to_string(), Box::new(cmd));
+    /// Si tu as besoin d’injecter un Prompt (Arc<Mutex<Prompt>>) pour certaines commandes,
+    /// ajoute ici leur enregistrement (ex: ThemeCommand { prompt }).
+    pub fn new_with_prompt(
+        prompt: std::sync::Arc<std::sync::Mutex<crate::shell::prompt::Prompt>>,
+    ) -> Self {
+        let mut registry = Self {
+            commands: HashMap::new(),
+            alias_map: HashMap::new(),
+        };
+
+        registry.register(hello::HelloCommand);
+        registry.register(clear::ClearCommand);
+        registry.register(cd::CdCommand);
+        registry.register(help::HelpCommand);
+        registry.register(theme::ThemeCommand { prompt });
+
+        registry
     }
 
-    /// Attempts to execute a command by name
-    ///
-    /// # Arguments
-    /// * `cmd` - The name of the command to execute
-    /// * `args` - Arguments to pass to the command
-    ///
-    /// # Returns
-    /// * `true` if the command was found and executed
-    /// * `false` if the command wasn't found
+    /// Enregistre une commande et renseigne ses alias.
+    pub fn register<C: Command + 'static>(&mut self, cmd: C) {
+        let name = cmd.name().to_string();
+        let aliases = cmd.aliases();
+
+        self.commands.insert(name.clone(), Box::new(cmd));
+        for &al in aliases {
+            self.alias_map.insert(al.to_string(), name.clone());
+        }
+    }
+
+    /// Résout un nom (ou alias) vers la commande interne.
+    fn resolve(&self, name_or_alias: &str) -> Option<&Box<dyn Command>> {
+        if let Some(c) = self.commands.get(name_or_alias) {
+            return Some(c);
+        }
+        if let Some(real) = self.alias_map.get(name_or_alias) {
+            return self.commands.get(real);
+        }
+        None
+    }
+
+    /// Exécute si c’est une commande interne, sinon retourne false pour laisser la main au système.
     pub fn execute(&self, cmd: &str, args: &[&str]) -> bool {
-        if let Some(command) = self.commands.get(cmd) {
-            command.execute(args);
+        if let Some(c) = self.resolve(cmd) {
+            c.execute(args, self);
             true
         } else {
             false
         }
     }
 
-    /// Creates a new registry with prompt access and theme support
-    ///
-    /// # Arguments
-    /// * `prompt` - Thread-safe reference to the shell's prompt
-    ///
-    /// # Returns
-    /// A new CommandRegistry with all commands including theme customization
-    pub fn new_with_prompt(prompt: Arc<Mutex<Prompt>>) -> Self {
-        let mut registry = Self {
-            commands: std::collections::HashMap::new(),
-        };
-
-        registry.register(HelloCommand);
-        registry.register(ClearCommand);
-        registry.register(CdCommand);
-        registry.register(HelpCommand);
-        registry.register(ThemeCommand { prompt });
-
-        registry
+    /// Liste (triée) des noms *canoniques* (pour autocomplétion & affichage).
+    pub fn list_names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.commands.keys().cloned().collect();
+        v.sort();
+        v
     }
+
+    /// Récupère (nom, about, usage) pour affichage type `help`.
+    pub fn list_metadata(&self) -> Vec<(String, String, String)> {
+        let mut out = Vec::new();
+        for (name, cmd) in &self.commands {
+            out.push((
+                name.clone(),
+                cmd.about().to_string(),
+                cmd.usage().to_string(),
+            ));
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// Proposition simple si commande inconnue (distance d’édition minimale).
+    pub fn suggest(&self, unknown: &str) -> Option<String> {
+        let mut best: Option<(usize, String)> = None;
+        for name in self.commands.keys() {
+            let d = levenshtein(unknown, name);
+            if best.as_ref().map(|(bd, _)| d < *bd).unwrap_or(true) {
+                best = Some((d, name.clone()));
+            }
+        }
+        best.and_then(|(d, s)| if d <= 2 { Some(s) } else { None })
+    }
+}
+
+/// Levenshtein minimaliste (pour une proposition "Did you mean ...?")
+fn levenshtein(a: &str, b: &str) -> usize {
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0; b.len() + 1];
+
+    for (i, ca) in a.chars().enumerate() {
+        curr[0] = i + 1;
+        for (j, cb) in b.chars().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
 }

@@ -20,3 +20,4 @@ pub mod executor;
 pub mod commands;
 pub mod prompt;
 pub mod config;
+pub mod tui;

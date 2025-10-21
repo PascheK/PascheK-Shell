@@ -1,79 +1,79 @@
-//! Read-Eval-Print Loop (REPL) implementation for PascheK Shell
-//!
-//! This module implements the main interaction loop of the shell, which:
-//! 1. Renders the customizable prompt
-//! 2. Reads user input
-//! 3. Processes the input (trims whitespace, handles empty lines)
-//! 4. Executes commands via the command executor
-//! 5. Handles special cases (exit command, errors)
-//!
-//! The REPL uses thread-safe constructs (`Arc<Mutex<>>`) to manage shared state
-//! between the prompt and command registry, allowing commands to modify the prompt
-//! appearance while maintaining thread safety.
-
-use std::{io::{self, Write}, sync::{Arc, Mutex}};
-use crate::shell::{
-    commands::CommandRegistry,
-    executor::execute_command,
-    prompt::Prompt,
+use crate::shell::{commands::CommandRegistry, executor::execute_command, prompt::Prompt};
+use dirs::home_dir;
+use reedline::{
+    DefaultCompleter, DefaultPrompt, DefaultPromptSegment, FileBackedHistory, Reedline, Signal,
 };
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
-/// Starts the main REPL loop of the PascheK Shell
-///
-/// This function:
-/// 1. Initializes the prompt with thread-safe sharing (`Arc<Mutex<>>`)
-/// 2. Creates the command registry with a reference to the prompt
-/// 3. Displays the welcome message
-/// 4. Enters the main loop which:
-///    - Renders and displays the prompt
-///    - Reads user input
-///    - Handles special commands (exit)
-///    - Delegates command execution
-///
-/// # Error Handling
-/// - Input reading errors are caught and reported
-/// - Empty lines are skipped
-/// - The loop continues until an explicit 'exit' command
-///
-/// # Thread Safety
-/// Uses `Arc<Mutex<Prompt>>` to safely share the prompt between
-/// the REPL and commands that may need to modify it.
 pub fn start_repl() {
-    // Create thread-safe prompt instance that can be modified by commands
     let prompt = Arc::new(Mutex::new(Prompt::new()));
     let registry = CommandRegistry::new_with_prompt(prompt.clone());
 
-    // Display welcome message and initial instructions
+    // Historique
+    let history_path = home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".paschek_history");
+
+    // Récupère la liste des commandes internes (ex: ["help","cd","clear","theme","hello"])
+    let command_names: Vec<String> = registry.list_names();
+
+    // (Optionnel) Petit debug pour vérifier qu’on a bien des mots à compléter
+    eprintln!("(debug) completions: {:?}", command_names);
+
+    // Seuil à 1 caractère (au lieu de 2) pour voir des suggestions dès la 1ère lettre
+    let completer = reedline::DefaultCompleter::new_with_wordlen(command_names, 1);
+
+    // Historique Reedline
+    let mut file_history = FileBackedHistory::with_file(1000, history_path.clone()).unwrap();
+    // Initialisation de l’éditeur
+    let mut line_editor = Reedline::create()
+        .with_history(Box::new(file_history))
+        .with_completer(Box::new(completer));
+
     println!("🦀 Welcome to PascheK Shell");
     println!("Type 'help' for a list of commands.\n");
 
     loop {
-        // Acquire lock and render prompt - lock is automatically released at end of line
-        let rendered = prompt.lock().unwrap().render();
-        print!("{}", rendered);
-        // Ensure prompt is displayed immediately without buffering
-        io::stdout().flush().unwrap();
+        // Prompt dynamique coloré
+        let prompt_text = prompt.lock().unwrap().render();
+        let custom_prompt = DefaultPrompt::new(
+            DefaultPromptSegment::Basic(prompt_text.into()),
+            DefaultPromptSegment::Empty,
+        );
 
-        // Read user input into a fresh String
-        let mut input = String::new();
-        if io::stdin().read_line(&mut input).is_err() {
-            eprintln!("❌ Error reading input");
-            continue;  // Skip this iteration on read error
+        // Lecture via Reedline
+        let sig = line_editor.read_line(&custom_prompt);
+
+        match sig {
+            Ok(Signal::Success(cmd)) => {
+                let trimmed = cmd.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if trimmed == "ui" {
+                    crate::shell::tui::start_tui().unwrap();
+                    continue;
+                }
+                if trimmed == "exit" {
+                    println!("👋 Goodbye!");
+                    break;
+                }
+
+                execute_command(trimmed, &registry);
+            }
+            Ok(Signal::CtrlD) => {
+                println!();
+                break;
+            }
+            Ok(Signal::CtrlC) => {
+                println!("^C");
+                continue;
+            }
+            Err(e) => {
+                eprintln!("❌ Input error: {}", e);
+                break;
+            }
         }
-
-        // Remove leading/trailing whitespace
-        let trimmed = input.trim();
-        if trimmed.is_empty() {
-            continue;  // Skip empty lines
-        }
-
-        // Handle special 'exit' command before regular command processing
-        if trimmed == "exit" {
-            println!("👋 Goodbye!");
-            break;
-        }
-
-        // Delegate all other commands to the executor
-        execute_command(trimmed, &registry);
     }
 }
