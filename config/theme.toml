@@ -1,0 +1,8 @@
+[shell]
+color = "BrightCyan"
+[path]
+color = "BrightWhite"
+[time]
+color = "BrightRed"
+[symbol]
+color = "BrightYellow"
