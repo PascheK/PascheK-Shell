@@ -1,53 +1,53 @@
 use chrono::Local;
-use std::env;
 use ratatui::{
+    layout::{Constraint, Direction, Layout, Rect},
+    style::Style,
+    text::Line,
     widgets::{Block, Borders, Paragraph},
-    layout::Rect,
-    text::{Span, Line},
-    style::{Color, Style},
     Frame,
 };
+use crate::shell::prompt::Theme;
 
-use crate::shell::prompt::theme::Theme;
-
-/// Données affichées dans la barre d’état.
+/// Status bar displayed at the bottom of every screen.
+///
+/// Left side shows the shell name and current time; right side displays
+/// contextual hints controlled by the parent screen.
 pub struct StatusBar {
-    pub theme: Theme,
+    theme: Theme,
+    right_hint: String,
 }
 
 impl StatusBar {
+    /// Create a new status bar with the given prompt Theme.
     pub fn new(theme: Theme) -> Self {
-        Self { theme }
+        Self {
+            theme,
+            right_hint: String::from(""),
+        }
     }
 
-    /// Rendu principal du panneau d’état.
-    pub fn render(&self, f: &mut Frame, area: Rect) {
-        // Récupère l’heure locale
-        let time = Local::now().format("%H:%M:%S").to_string();
+    /// Update the right-hand hint text.
+    pub fn set_hint<S: Into<String>>(&mut self, s: S) {
+        self.right_hint = s.into();
+    }
 
-        // Répertoire courant (simplifié)
-        let cwd = env::current_dir()
-            .ok()
-            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-            .unwrap_or_else(|| "/".to_string());
+    /// Render the status bar into the provided area.
+    pub fn render(&mut self, f: &mut Frame, area: Rect) {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(area);
 
-        // Thème actif (affiché par sa couleur shell)
-        let theme_color = self.theme.shell_color.to_ansi_color();
+        let left = Paragraph::new(Line::from(format!(
+            " PascheK Shell • {}",
+            Local::now().format("%H:%M:%S")
+        )))
+        .block(Block::default().borders(Borders::ALL).title("Status"));
 
-        // Composition de la ligne
-        let line = Line::from(vec![
-            Span::styled(format!(" "), Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("  PascheK Shell "), Style::default().fg(theme_color)),
-            Span::styled("  ", Style::default().fg(Color::DarkGray)),
-            Span::raw(" "),
-            Span::styled(format!("📂 {cwd}"), Style::default().fg(Color::Cyan)),
-            Span::raw("   "),
-            Span::styled(format!("🕓 {time}"), Style::default().fg(Color::Yellow)),
-        ]);
+        let right = Paragraph::new(Line::from(self.right_hint.clone()))
+            .block(Block::default().borders(Borders::ALL));
 
-        let widget = Paragraph::new(line)
-            .block(Block::default().borders(Borders::ALL).title("Status"));
-
-        f.render_widget(widget, area);
+        f.render_widget(left, cols[0]);
+        f.render_widget(right, cols[1]);
     }
 }

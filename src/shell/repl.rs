@@ -52,7 +52,10 @@ pub fn start_repl() {
                     continue;
                 }
                 if trimmed == "ui" {
-                    crate::shell::tui::start_tui().unwrap();
+                    if let Err(e) = crate::shell::tui::start_tui() {
+                        println!("TUI error: {e}");
+                    }
+                    // On revient au REPL quand le TUI se ferme
                     continue;
                 }
                 if trimmed == "exit" {

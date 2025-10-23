@@ -47,6 +47,7 @@ pub struct Theme {
     pub time_color: AnsiColors,
     /// Color for the prompt symbol
     pub symbol_color: AnsiColors,
+
 }
 
 impl Theme {
@@ -106,5 +107,9 @@ impl Theme {
             "brightcyan" => AnsiColors::BrightCyan,
             _ => AnsiColors::White,
         }
+    }
+
+    pub fn to_ansi_color(&self) -> AnsiColors {
+        self.shell_color
     }
 }
